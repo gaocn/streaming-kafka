@@ -1,0 +1,18 @@
+[问题1]
+Exception in thread "main" java.lang.NoSuchMethodError: scala.Predef$.refArrayOps([Ljava/lang/Object;)Lscala/collection/mutable/ArrayOps;
+	at org.apache.spark.util.Utils$.getCallSite(Utils.scala:1342)
+	at org.apache.spark.SparkContext.<init>(SparkContext.scala:82)
+解决方案: 由于spark版本与要求的scala不一致造成
+
+
+ERROR [Executor task launch worker-0] (Logging.scala:95) - Exception in task 0.0 in stage 0.0 (TID 0)
+java.nio.channels.ClosedChannelException
+	at kafka.network.BlockingChannel.send(BlockingChannel.scala:110)
+	at kafka.consumer.SimpleConsumer.liftedTree1$1(SimpleConsumer.scala:98)
+	at kafka.consumer.SimpleConsumer.kafka$consumer$SimpleConsumer$$sendRequest(SimpleConsumer.scala:83)
+
+	是由于Kafka server.properties中的advertised.host.name 属性没有配置。这个属性代表客户端访问Kafka的地址。如果没配置默认是主机名。
+	# Hostname and port the broker will advertise to producers and consumers. If not set,
+    # it uses the value for "listeners" if configured.  Otherwise, it will use the value
+    # returned from java.net.InetAddress.getCanonicalHostName().
+    advertised.listeners=PLAINTEXT://10.230.135.124:9093
