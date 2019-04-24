@@ -18,20 +18,64 @@ import scala.collection.mutable
 import scala.reflect.ClassTag
 
 /**
-	* 该流"不提交偏移量"，直接创建KafkaRDD而不是通过Receiver接收
-	* 数据并在每次batch interval时创建，从而实现语义一致性（Exactly
-	* Once，消息仅且消费一次）。
+	* 该DStream不使用Receiver，而是直接创建KafkaRDD从指定偏移量范围
+	* 读取记录，不会提交偏移量到ZK上。已消费的偏移量有该DStream自己负责
+	* 跟踪记录，如果需要更新ZK/Kafka上的偏移量，需要用户在应用程序中手动
+	* 进行更新，用户可以在generatedRDD中获取每一个BatchDuration产生的
+	* 偏移量范围。
 	*
-	* KafkaRDD + RateController实现一系列RDD的创建
+	* 1、、DirectKafkaInputDStream有一些列KafkaRDD构成，每个RDD内部的每
+	* 一个分区对应一个Kafka的主题分区。
 	*
-	* 该流有一些列[[org.apache.spark.streaming.kafka.rdd.KafkaRDD]]
-	* 构成，每个RDD内部的每一个分区对应一个Kafka的主题分区。
-	*
+	* 2、KafkaRDD + RateController实现一系列RDD的创建。
 	* spark.streaming.kafka.maxRatePerPartition用于控制每个分区读
 	* 取消息的速度，单位为s。
 	*
-	* 每次读取时需要指定起始位置，由于偏移量是由用户维护，因此在错误恢复
-	* 或应用程序时，需要用户显示指定要读的位置。
+	* [Exactly Once语义]
+	* 1、transformations exactly once
+	*
+	* KafkaReceiver/ReliableKafkaReceiver的问题：重复消费
+	* 由于KafkaRDD是根据Receiver从Kafka主题拉取的数据在每个Batch Interval
+	* 产生的，而消费的记录的偏移量是在Receiver内部自己维护或采用Kafka
+	* 的auto.commit.enable维护(默认每5s提交一次)，两者在出现故障时都
+	* 会产生重复消费问题。下面以ReliableKafkaReceiver为例进行说明：
+	*
+	* --------------------------------------------------->
+	*     batch interval
+	* ----------@@----------@@----------@@--------------->
+	*          RDD1        RDD2         X
+	*                                  /|\发生故障
+	* 如上图所示，每个batch interval产生一个Block（后续基于其创建
+	* KafkaRDD），每次产生KafkaRDD都会更新ZK/Kafka中偏移量，在第三次
+	* 产生KafkaRDD成功但还没有来得及提交偏移量时程序崩溃，因此已经产生
+	* KafkaRDD当偏移量没有被提交。在应用程序恢复重启后，上一次未来的及
+	* 提交会被继续消费并添加到创建的新的KafkaRDD中，这样在后续流应用程
+	* 序处理数据时就会出现重复消费————同一条记录会被处理多次。
+	*
+	* 采用DirectKafkaInputDStream为什么能保证一条记录只会被处理一次！
+	* 因为没有使用Receiver，每次Batch Interval生成的KafkaRDD是根据
+	* 分区最大处理记录数和每个Batch流入记录的最小值确定当前KafkaRDD能
+	* 够处理的偏移量范围，并且每次被消费的偏移量范围都会通过WAL进行保存。
+	* 当应用程序崩溃时，根据WAL checkpoint进行恢复，可以得到上一次创建
+	* KafkaRDD时偏移量的位置，接下来产生的KafkaRDD就会在这个记录的偏
+	* 移量的基础上继续在每个Batch Interval产生KafkaRDD。这样可以保证
+	* 所有产生的KafkaRDD中没有重复的Kafka记录，因此就不会出现重复消费
+	* 问题。
+	*
+	* 因此DirectKafkaInputDStream可以保证每条记录被接收并且处理一次，
+	* 但是不能保证被处理后的数据仅且会被输出一次！
+	*
+	* 2、outputted exactly once
+	*
+	* 3、End-to-end exactly-once semantics需要满足下面两个条件
+	*    + transformations exactly once
+	*    + outputted exactly once
+	*
+	*   为了实现端到端的一次性意义，有两种方法：
+	*  (1)、确保输出操作的幂等性(idempotent)，例如：存储系统的记录支持
+	*    唯一主键，相同记录写入多次时忽略错误；
+	*  (2)、外部存储系统支持事务操作，例如：MySQL通过事务确保操作原子性
+	*  不允许部分成功部分失败。
 	*
 	* @param fromOffsets    准备读取数据的Kafka各分区的起始偏移量
 	* @param messageHandler 读取消息后的处理句柄
@@ -200,5 +244,4 @@ R: ClassTag
 			logInfo(s"当前预测速率为：rate=${rate}")
 		}
 	}
-
 }
