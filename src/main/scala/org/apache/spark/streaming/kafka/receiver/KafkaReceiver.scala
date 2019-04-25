@@ -58,6 +58,7 @@ T <: Decoder[_] : ClassTag
 		try {
 			topicMessageStreams.values.foreach(streams => {
 				streams.foreach { stream =>
+					logInfo(s"为主题每个分区分别创建一个线程用于消费数据：${stream}")
 					excutorPool.submit(new MessageHandler(stream))
 				}
 			})
@@ -68,11 +69,11 @@ T <: Decoder[_] : ClassTag
 
 	private class  MessageHandler(stream: KafkaStream[K,V]) extends Runnable {
 		override def run(): Unit = {
-			logInfo("KafkaReceiver接收到数据，开始处理")
 			try {
 				val streamIter = stream.iterator()
 				while (streamIter.hasNext()) {
 					val messageAndMetadata = streamIter.next()
+					logInfo(s"KafkaReceiver接收到数据:${messageAndMetadata}，开始处理")
 					store((messageAndMetadata.key(), messageAndMetadata.message()))
 				}
 			} catch {

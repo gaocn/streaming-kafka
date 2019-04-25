@@ -6,10 +6,11 @@ import java.util.Properties
 
 import kafka.admin.AdminUtils
 import kafka.api.Request
-import kafka.producer.{KeyedMessage, Producer, ProducerConfig}
 import kafka.server.{KafkaConfig, KafkaServer}
 import kafka.utils.ZkUtils
 import org.I0Itec.zkclient.ZkClient
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord}
+import org.apache.kafka.common.serialization.StringSerializer
 import org.apache.spark.streaming.Time
 import org.apache.spark.util.Utils
 import org.apache.spark.{Logging, SparkConf}
@@ -40,7 +41,7 @@ private[kafka] class KafkaTestUtils extends Logging {
 	private var zkClient: ZkClient = _
 
 	// Kafka 生产者
-	private var producer: Producer[String, String] = _
+	private var producer: KafkaProducer[String, String] = _
 
 	private var zkReady = false
 	private var brokerReady = false
@@ -63,7 +64,7 @@ private[kafka] class KafkaTestUtils extends Logging {
 	private def setupEmbeddedZookeeper() = {
 		zookeeper = new EmbeddedZookeeper(s"${zkHost}:${zkPort}")
 		zkPort = zookeeper.actualPort
-		zkClient = new ZkClient(s"${zkPort}:${zkPort}", zkSessionTimeout, zkConnectionTimeout)
+		zkClient = new ZkClient(s"${zkHost}:${zkPort}", zkSessionTimeout, zkConnectionTimeout)
 		zkReady = true
 	}
 
@@ -126,7 +127,7 @@ private[kafka] class KafkaTestUtils extends Logging {
 
 	def createTopic(topic: String): Unit = {
 		AdminUtils.createTopic(zkClient, topic,1, 1)
-		waitUntilMetadataIsPropagated(topic, 0)
+		//waitUntilMetadataIsPropagated(topic, 0)
 	}
 
 	def  sendMessage(topic:String, messageToFreq: Map[String, Int]):Unit = {
@@ -137,18 +138,23 @@ private[kafka] class KafkaTestUtils extends Logging {
 	}
 
 	def sendMessage(topic: String, message: Array[String]):Unit = {
-		producer = new Producer[String, String](new ProducerConfig(producerConfiguration))
-		producer.send(message.map{new KeyedMessage[String, String](topic, _)}: _*)
+		//producer = new Producer[String, String](new ProducerConfig(producerConfiguration))
+		producer = new KafkaProducer[String, String](producerConfiguration)
+		message.foreach{ value =>
+			producer.send(new ProducerRecord[String, String](topic, value))
+			logInfo(s"生产者发送消息：${value}")
+		}
 		producer.close()
 		producer = null
 	}
 
 	private def producerConfiguration: Properties = {
 		val props = new Properties();
-		props.put("metadata.broker.list", brokerAddress)
-		props.put("serializer.class", classOf[String].getName)
+		props.put("bootstrap.servers", brokerAddress)
+		props.put("key.serializer", classOf[StringSerializer].getName)
+		props.put("value.serializer", classOf[StringSerializer].getName)
 		//等待所有ISR确认后，返回确认响应
-		props.put("request.required.acks", "-1")
+		props.put("acks", "0")
 		props
 	}
 
@@ -156,7 +162,7 @@ private[kafka] class KafkaTestUtils extends Logging {
 		def isPropagated = server.apis.metadataCache.getPartitionInfo(topic, partition) match {
 			case Some(partitionStateInfo) =>
 				val leaderAndInSyncReplicas = partitionStateInfo.leaderIsrAndControllerEpoch.leaderAndIsr
-
+				logInfo(s"Broker中同步副本信息：${leaderAndInSyncReplicas}")
 				ZkUtils.getLeaderAndIsrForPartition(zkClient, topic, partition).isDefined &&
 				Request.isValidBrokerId(leaderAndInSyncReplicas.leader) &&
 				leaderAndInSyncReplicas.isr.size >= 1
@@ -215,6 +221,7 @@ private[kafka] class KafkaTestUtils extends Logging {
 		factory.startup(zookeeper)
 
 		val actualPort = factory.getLocalPort
+		logInfo(s"启动ZK实例：${factory.getLocalAddress}:${factory.getLocalPort}")
 
 		def shutdown() {
 			factory.shutdown();

@@ -15,7 +15,7 @@ import org.apache.spark.streaming.util.WriteAheadLogUtils
 
 import scala.reflect.ClassTag
 
-object KafkaUtils {
+object GKafkaUtils {
 
 
 	/**
